@@ -44,54 +44,25 @@ service cloud.firestore {
              data.role in ['field_member', 'hq_admin'];
     }
 
-    function isValidAffectedLocation(data) {
-      return hasOnlyAllowedFields(['name', 'parentLocation', 'lat', 'lng', 'severity', 'status', 'timestamp']) &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
-             (!('parentLocation' in data) || (data.parentLocation is string && data.parentLocation.size() < 200)) &&
-             data.lat is number && data.lng is number &&
-             data.severity in ['low', 'medium', 'high', 'critical'] &&
-             data.status in ['active', 'resolved'];
-    }
-
     function isValidResource(data) {
-      return hasOnlyAllowedFields(['name', 'type', 'totalQuantity', 'availableQuantity']) &&
-             data.name is string && data.name.size() > 0 &&
-             data.type in ['medical', 'food', 'personnel', 'equipment', 'water'] &&
-             data.totalQuantity is number && data.totalQuantity >= 0 &&
-             data.availableQuantity is number && data.availableQuantity >= 0;
+      return hasOnlyAllowedFields(['name', 'type', 'status', 'location', 'lastUpdated', 'assignedTo', 'details']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.type in ['team', 'equipment', 'vehicle'] &&
+             data.status in ['active', 'en_route', 'on_standby', 'maintenance'] &&
+             data.location is map &&
+             data.location.lat is number && data.location.lng is number &&
+             (data.lastUpdated is timestamp || data.lastUpdated is string) &&
+             (!('assignedTo' in data) || (data.assignedTo is string)) &&
+             (!('details' in data) || (data.details is string && data.details.size() < 1000));
     }
 
-    function isValidRequest(data) {
-      return hasOnlyAllowedFields(['locationId', 'resourceType', 'quantity', 'status', 'requestedBy', 'timestamp']) &&
-             data.locationId is string &&
-             data.resourceType is string &&
-             data.quantity is number && data.quantity > 0 &&
-             data.status in ['pending', 'approved', 'rejected', 'fulfilled'] &&
-             data.requestedBy == request.auth.uid;
-    }
-
-    function isValidTransfer(data) {
-      return hasOnlyAllowedFields(['resourceType', 'quantity', 'fromLocation', 'toLocation', 'status', 'timestamp']) &&
-             data.resourceType is string &&
-             data.quantity is number && data.quantity > 0 &&
-             data.fromLocation is string &&
-             data.toLocation is string &&
-             data.status in ['preparing', 'in-transit', 'delivered'];
-    }
-
-    function isValidMessage(data) {
-      return hasOnlyAllowedFields(['locationId', 'senderId', 'senderName', 'text', 'timestamp']) &&
-             data.locationId is string &&
-             data.senderId == request.auth.uid &&
-             data.senderName is string &&
-             data.text is string && data.text.size() > 0 && data.text.size() < 1000;
-    }
-
-    function isValidVolunteer(data) {
-      return hasOnlyAllowedFields(['name', 'locationId', 'skills', 'status', 'contact']) &&
-             data.name is string && data.name.size() > 0 &&
-             data.locationId is string &&
-             data.status in ['active', 'on-break', 'off-duty'];
+    function isValidAlert(data) {
+      return hasOnlyAllowedFields(['title', 'message', 'severity', 'timestamp', 'active']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.message is string && data.message.size() > 0 && data.message.size() < 2000 &&
+             data.severity in ['low', 'medium', 'high', 'critical'] &&
+             (data.timestamp is timestamp || data.timestamp is string) &&
+             data.active is bool;
     }
 
     // ===============================================================
@@ -104,37 +75,17 @@ service cloud.firestore {
       allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
     }
 
-    match /affectedLocations/{locationId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() && isValidAffectedLocation(request.resource.data);
-      allow delete: if isAdmin();
-    }
-
     match /resources/{resourceId} {
       allow read: if isAuthenticated();
       allow create, update: if isAdmin() && isValidResource(request.resource.data);
+      allow delete: if isAdmin();
     }
 
-    match /requests/{requestId} {
+    match /alerts/{alertId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidRequest(request.resource.data);
-      allow update: if (isAdmin() || (isOwner(resource.data.requestedBy) && resource.data.status == 'pending')) && isValidRequest(request.resource.data);
-    }
-
-    match /transfers/{transferId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() && isValidTransfer(request.resource.data);
-    }
-
-    match /messages/{messageId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidMessage(request.resource.data);
-    }
-
-    match /volunteers/{volunteerId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() && isValidVolunteer(request.resource.data);
+      allow create, update: if isAdmin() && isValidAlert(request.resource.data);
       allow delete: if isAdmin();
     }
   }
 }
+
