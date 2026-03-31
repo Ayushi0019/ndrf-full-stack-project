@@ -1,0 +1,5 @@
+{
+  "name": "NDRF Resource Management",
+  "description": "A comprehensive dashboard system for NDRF field members and headquarters to track disaster resource requirements and coordinate transfers in real-time.",
+  "requestFramePermissions": ["geolocation"]
+}

@@ -1,0 +1,140 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'hq_admin' ||
+         (request.auth.token.email == "ayushikhatri994@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isFieldMember() {
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'field_member';
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'name', 'email', 'role', 'createdAt']) &&
+             data.uid is string && data.uid.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.email is string && data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
+             data.role in ['field_member', 'hq_admin'];
+    }
+
+    function isValidAffectedLocation(data) {
+      return hasOnlyAllowedFields(['name', 'parentLocation', 'lat', 'lng', 'severity', 'status', 'timestamp']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             (!('parentLocation' in data) || (data.parentLocation is string && data.parentLocation.size() < 200)) &&
+             data.lat is number && data.lng is number &&
+             data.severity in ['low', 'medium', 'high', 'critical'] &&
+             data.status in ['active', 'resolved'];
+    }
+
+    function isValidResource(data) {
+      return hasOnlyAllowedFields(['name', 'type', 'totalQuantity', 'availableQuantity']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.type in ['medical', 'food', 'personnel', 'equipment', 'water'] &&
+             data.totalQuantity is number && data.totalQuantity >= 0 &&
+             data.availableQuantity is number && data.availableQuantity >= 0;
+    }
+
+    function isValidRequest(data) {
+      return hasOnlyAllowedFields(['locationId', 'resourceType', 'quantity', 'status', 'requestedBy', 'timestamp']) &&
+             data.locationId is string &&
+             data.resourceType is string &&
+             data.quantity is number && data.quantity > 0 &&
+             data.status in ['pending', 'approved', 'rejected', 'fulfilled'] &&
+             data.requestedBy == request.auth.uid;
+    }
+
+    function isValidTransfer(data) {
+      return hasOnlyAllowedFields(['resourceType', 'quantity', 'fromLocation', 'toLocation', 'status', 'timestamp']) &&
+             data.resourceType is string &&
+             data.quantity is number && data.quantity > 0 &&
+             data.fromLocation is string &&
+             data.toLocation is string &&
+             data.status in ['preparing', 'in-transit', 'delivered'];
+    }
+
+    function isValidMessage(data) {
+      return hasOnlyAllowedFields(['locationId', 'senderId', 'senderName', 'text', 'timestamp']) &&
+             data.locationId is string &&
+             data.senderId == request.auth.uid &&
+             data.senderName is string &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 1000;
+    }
+
+    function isValidVolunteer(data) {
+      return hasOnlyAllowedFields(['name', 'locationId', 'skills', 'status', 'contact']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.locationId is string &&
+             data.status in ['active', 'on-break', 'off-duty'];
+    }
+
+    // ===============================================================
+    // Match Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == 'field_member' || isAdmin());
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /affectedLocations/{locationId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() && isValidAffectedLocation(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /resources/{resourceId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() && isValidResource(request.resource.data);
+    }
+
+    match /requests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidRequest(request.resource.data);
+      allow update: if (isAdmin() || (isOwner(resource.data.requestedBy) && resource.data.status == 'pending')) && isValidRequest(request.resource.data);
+    }
+
+    match /transfers/{transferId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() && isValidTransfer(request.resource.data);
+    }
+
+    match /messages/{messageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidMessage(request.resource.data);
+    }
+
+    match /volunteers/{volunteerId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidVolunteer(request.resource.data);
+      allow delete: if isAdmin();
+    }
+  }
+}

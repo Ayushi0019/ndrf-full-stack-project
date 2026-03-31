@@ -1,0 +1,107 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "NDRF member or HQ administrator profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "name": { "type": "string", "description": "Full name" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["field_member", "hq_admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "role"]
+    },
+    "AffectedLocation": {
+      "title": "Affected Location",
+      "description": "A specific location affected by the current active disaster",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the location/sector" },
+        "parentLocation": { "type": "string", "description": "The parent city or region (e.g., Dehradun, Haridwar)." },
+        "lat": { "type": "number", "description": "Latitude coordinate." },
+        "lng": { "type": "number", "description": "Longitude coordinate." },
+        "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "status": { "type": "string", "enum": ["active", "resolved"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "severity", "status", "lat", "lng"]
+    },
+    "Resource": {
+      "title": "Resource",
+      "description": "Available NDRF resources",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["medical", "food", "personnel", "equipment", "water"] },
+        "totalQuantity": { "type": "number" },
+        "availableQuantity": { "type": "number" }
+      },
+      "required": ["name", "type", "totalQuantity", "availableQuantity"]
+    },
+    "ResourceRequest": {
+      "title": "Resource Request",
+      "description": "Request for resources from an affected location",
+      "type": "object",
+      "properties": {
+        "locationId": { "type": "string" },
+        "resourceType": { "type": "string" },
+        "quantity": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "fulfilled"] },
+        "requestedBy": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["locationId", "resourceType", "quantity", "status", "requestedBy"]
+    },
+    "Transfer": {
+      "title": "Resource Transfer",
+      "description": "Movement of resources between locations",
+      "type": "object",
+      "properties": {
+        "resourceType": { "type": "string" },
+        "quantity": { "type": "number" },
+        "fromLocation": { "type": "string" },
+        "toLocation": { "type": "string" },
+        "status": { "type": "string", "enum": ["preparing", "in-transit", "delivered"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["resourceType", "quantity", "fromLocation", "toLocation", "status"]
+    },
+    "Message": {
+      "title": "Command Message",
+      "description": "Real-time communication between NDRF members",
+      "type": "object",
+      "properties": {
+        "locationId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["locationId", "senderId", "senderName", "text"]
+    },
+    "Volunteer": {
+      "title": "Volunteer",
+      "description": "Volunteers registered for disaster relief",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "locationId": { "type": "string" },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["active", "on-break", "off-duty"] },
+        "contact": { "type": "string" }
+      },
+      "required": ["name", "locationId", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": { "schema": "User", "description": "User profiles" },
+    "/affectedLocations/{locationId}": { "schema": "AffectedLocation", "description": "Locations affected by the current disaster" },
+    "/resources/{resourceId}": { "schema": "Resource", "description": "Global resource inventory" },
+    "/requests/{requestId}": { "schema": "ResourceRequest", "description": "Field resource requests" },
+    "/transfers/{transferId}": { "schema": "Transfer", "description": "Resource transfer tracking" },
+    "/messages/{messageId}": { "schema": "Message", "description": "Command center messages" },
+    "/volunteers/{volunteerId}": { "schema": "Volunteer", "description": "Volunteer tracking" }
+  }
+}
