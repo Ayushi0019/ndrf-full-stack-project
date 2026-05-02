@@ -14,22 +14,20 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // Role Fetching
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
     function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'hq_admin' ||
-         (request.auth.token.email == "ayushikhatri994@gmail.com" && request.auth.token.email_verified == true));
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserRole() == 'hq_admin') ||
+        (request.auth.token.get('email', '') == "ayushikhatri994@gmail.com" && request.auth.token.get('email_verified', false) == true)
+      );
     }
 
     function isFieldMember() {
-      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'field_member';
-    }
-
-    function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
-    }
-
-    function hasRequiredFields(fields) {
-      return request.resource.data.keys().hasAll(fields);
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserRole() == 'field';
     }
 
     // ===============================================================
@@ -37,32 +35,52 @@ service cloud.firestore {
     // ===============================================================
 
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['uid', 'name', 'email', 'role', 'createdAt']) &&
-             data.uid is string && data.uid.size() > 0 &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.email is string && data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
-             data.role in ['field_member', 'hq_admin'];
+      return data.keys().hasAll(['uid', 'name', 'email', 'role', 'createdAt']) &&
+             data.keys().size() == 5 &&
+             data.uid is string &&
+             data.name is string &&
+             data.role in ['field', 'hq_admin'];
     }
 
     function isValidResource(data) {
-      return hasOnlyAllowedFields(['name', 'type', 'status', 'location', 'lastUpdated', 'assignedTo', 'details']) &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+      return data.name is string &&
              data.type in ['team', 'equipment', 'vehicle'] &&
              data.status in ['active', 'en_route', 'on_standby', 'maintenance'] &&
-             data.location is map &&
-             data.location.lat is number && data.location.lng is number &&
-             (data.lastUpdated is timestamp || data.lastUpdated is string) &&
-             (!('assignedTo' in data) || (data.assignedTo is string)) &&
-             (!('details' in data) || (data.details is string && data.details.size() < 1000));
+             data.location is map;
     }
 
     function isValidAlert(data) {
-      return hasOnlyAllowedFields(['title', 'message', 'severity', 'timestamp', 'active']) &&
-             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
-             data.message is string && data.message.size() > 0 && data.message.size() < 2000 &&
+      return data.title is string &&
+             data.message is string &&
              data.severity in ['low', 'medium', 'high', 'critical'] &&
-             (data.timestamp is timestamp || data.timestamp is string) &&
              data.active is bool;
+    }
+
+    function isValidRequest(data) {
+      return data.item is string &&
+             data.quantity is number &&
+             data.priority in ['low', 'medium', 'high', 'critical'] &&
+             data.status in ['pending', 'approved', 'dispatched', 'delivered', 'cancelled'] &&
+             data.requesterId == request.auth.uid;
+    }
+
+    function isValidInventoryItem(data) {
+      return data.name is string &&
+             data.category in ['medical', 'rescue', 'shelter', 'rations', 'vehicles'] &&
+             data.quantity is number;
+    }
+
+    function isValidIncidentPhoto(data) {
+      return data.url is string &&
+             data.uploadedBy is string;
+    }
+
+    function isValidIncident(data) {
+      return data.name is string &&
+             data.epicenter is map &&
+             data.radiusKm is number &&
+             data.severity in ['low', 'medium', 'high', 'critical'] &&
+             data.status in ['active', 'contained', 'resolved'];
     }
 
     // ===============================================================
@@ -71,8 +89,8 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == 'field_member' || isAdmin());
-      allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
     }
 
     match /resources/{resourceId} {
@@ -85,6 +103,34 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create, update: if isAdmin() && isValidAlert(request.resource.data);
       allow delete: if isAdmin();
+    }
+
+    match /requests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidRequest(request.resource.data);
+      allow update: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.requesterId && request.resource.data.status == 'cancelled');
+      allow delete: if isAdmin();
+    }
+
+    match /inventory/{itemId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidInventoryItem(request.resource.data);
+    }
+
+    match /photos/{photoId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidIncidentPhoto(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+
+    match /incidents/{incidentId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() && isValidIncident(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { UserProfile } from './types';
 
@@ -15,35 +15,34 @@ import { HQDashboard } from './components/HQDashboard';
 const App = () => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isGuest, setIsGuest] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check for guest session first
-    const guestData = sessionStorage.getItem('ndrf_guest_user');
-    if (guestData) {
-      console.log('Restoring Guest Session...');
-      setUser(JSON.parse(guestData));
-      setIsGuest(true);
-      setLoading(false);
-      return;
-    }
-
     console.log('Initializing Auth Listener...');
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let unsubscribeProfile: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (unsubscribeProfile) {
+        unsubscribeProfile();
+        unsubscribeProfile = null;
+      }
+
       if (firebaseUser) {
-        console.log('Firebase User Detected:', firebaseUser.email);
-        try {
-          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-          if (userDoc.exists()) {
-            const profile = { uid: firebaseUser.uid, ...userDoc.data() } as UserProfile;
-            console.log('User Profile Loaded:', profile.role);
+        console.log('User Detected:', firebaseUser.uid, firebaseUser.email);
+        
+        // Listen to the user document for real-time updates (like role changes)
+        unsubscribeProfile = onSnapshot(doc(db, 'users', firebaseUser.uid), async (snapshot) => {
+          if (snapshot.exists()) {
+            const profile = { uid: firebaseUser.uid, ...snapshot.data() } as UserProfile;
+            console.log('User Profile Updated:', profile.role);
             setUser(profile);
           } else {
-            console.warn('No Firestore profile found for UID:', firebaseUser.uid);
+            console.warn('Profile not found for user:', firebaseUser.uid);
           }
-        } catch (err) {
-          console.error('Error loading user profile:', err);
-        }
+        }, (err) => {
+          console.error('Profile Snapshot Error:', err);
+        });
+
       } else {
         console.log('No Authenticated User.');
         setUser(null);
@@ -51,31 +50,21 @@ const App = () => {
       setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, []);
-
-  const handleGuestLogin = (role: 'hq_admin' | 'field_member') => {
-    console.log('Guest Login Triggered:', role);
-    const guestUser: UserProfile = {
-      uid: `guest_${Math.random().toString(36).substr(2, 9)}`,
-      name: `Guest ${role === 'hq_admin' ? 'Admin' : 'Member'}`,
-      email: `guest_${role}@ndrf.gov.in`,
-      role,
-      createdAt: Timestamp.now()
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeProfile) unsubscribeProfile();
     };
-    sessionStorage.setItem('ndrf_guest_user', JSON.stringify(guestUser));
-    setUser(guestUser);
-    setIsGuest(true);
-  };
+  }, []);
 
   const handleLogout = async () => {
     console.log('Logging out...');
-    if (isGuest) {
-      sessionStorage.removeItem('ndrf_guest_user');
-      setIsGuest(false);
-      setUser(null);
-    } else {
+    setLoading(true);
+    try {
       await signOut(auth);
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -92,7 +81,7 @@ const App = () => {
             <Routes>
               <Route 
                 path="/login" 
-                element={!user ? <Login onGuestLogin={handleGuestLogin} /> : <Navigate to="/" />} 
+                element={!user ? <Login authError={error} /> : <Navigate to="/" />} 
               />
               <Route 
                 path="/" 

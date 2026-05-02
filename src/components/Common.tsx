@@ -1,6 +1,7 @@
 import React, { Component, ErrorInfo, ReactNode, useState, useEffect } from 'react';
 import { ShieldAlert, AlertTriangle, Info, CheckCircle2, XCircle } from 'lucide-react';
-import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../firebase';
 import { EmergencyAlert, OperationType, FirestoreErrorInfo } from '../types';
 
@@ -13,7 +14,7 @@ export const handleFirestoreError = (error: unknown, operationType: OperationTyp
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
         providerId: provider.providerId,
         displayName: provider.displayName,
         email: provider.email,
@@ -28,9 +29,12 @@ export const handleFirestoreError = (error: unknown, operationType: OperationTyp
 };
 
 export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
+  props: { children: ReactNode };
+  state: { hasError: boolean, error: Error | null } = { hasError: false, error: null };
+
   constructor(props: { children: ReactNode }) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.props = props;
   }
 
   static getDerivedStateFromError(error: Error) {
@@ -110,21 +114,58 @@ export const LoadingScreen = () => (
 
 export const AlertTicker = () => {
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([]);
+  const [activeZone, setActiveZone] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      setIsAuthenticated(!!user);
+    });
+    return () => unsubAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    // 1. Get active incident zone
+    const incidentsQ = query(collection(db, 'incidents'), where('status', '==', 'active'), orderBy('timestamp', 'desc'), limit(1));
+    const unsubIncidents = onSnapshot(incidentsQ, (snapshot) => {
+      if (!snapshot.empty) {
+        setActiveZone(snapshot.docs[0].data().name);
+      }
+    }, (err) => {
+      console.warn('Alert Ticker Incident Listen Error:', err);
+    });
+
+    // 2. Get alerts
     const q = query(
       collection(db, 'alerts'),
       where('active', '==', true),
       orderBy('timestamp', 'desc')
     );
 
-    return onSnapshot(q, (snapshot) => {
+    const unsubAlerts = onSnapshot(q, (snapshot) => {
       const alertData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as EmergencyAlert));
-      setAlerts(alertData);
+      
+      // Prioritize alerts from active zone
+      const prioritized = [...alertData].sort((a, b) => {
+        const aMatch = a.disasterZone === activeZone;
+        const bMatch = b.disasterZone === activeZone;
+        if (aMatch && !bMatch) return -1;
+        if (!aMatch && bMatch) return 1;
+        return 0;
+      });
+      
+      setAlerts(prioritized);
     }, (err) => {
-      console.error('Alert Ticker Error:', err);
+      console.warn('Alert Ticker Alert Listen Error:', err);
     });
-  }, []);
+
+    return () => {
+      unsubIncidents();
+      unsubAlerts();
+    };
+  }, [activeZone, isAuthenticated]);
 
   if (alerts.length === 0) return null;
 
@@ -135,7 +176,8 @@ export const AlertTicker = () => {
           <div key={alert.id} className="flex items-center gap-3">
             <AlertTriangle className="w-4 h-4 animate-pulse" />
             <span className="font-black uppercase tracking-wider text-xs">
-              [{alert.severity}] {alert.title}: {alert.message}
+              [{alert.severity}] {alert.title}: {alert.message} 
+              {alert.disasterZone && <span className="text-white/70 ml-2">({alert.disasterZone} | {alert.affectedArea || 'Multiple Areas'})</span>}
             </span>
           </div>
         ))}
@@ -145,6 +187,7 @@ export const AlertTicker = () => {
             <AlertTriangle className="w-4 h-4 animate-pulse" />
             <span className="font-black uppercase tracking-wider text-xs">
               [{alert.severity}] {alert.title}: {alert.message}
+              {alert.disasterZone && <span className="text-white/70 ml-2">({alert.disasterZone} | {alert.affectedArea || 'Multiple Areas'})</span>}
             </span>
           </div>
         ))}

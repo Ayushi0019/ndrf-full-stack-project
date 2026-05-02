@@ -6,11 +6,15 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { UserProfile } from '../types';
 
-export const Login = ({ onGuestLogin }: { onGuestLogin: (role: 'hq_admin' | 'field_member') => void }) => {
+export const Login = ({ authError }: { 
+  authError?: string | null 
+}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const isIframe = window.self !== window.top;
+
+  const displayError = error || authError;
 
   const handleLogin = async () => {
     console.log('Starting Google Login...');
@@ -26,7 +30,8 @@ export const Login = ({ onGuestLogin }: { onGuestLogin: (role: 'hq_admin' | 'fie
 
       const userDoc = await getDoc(doc(db, 'users', user.uid));
       if (!userDoc.exists()) {
-        const role = user.email === 'ayushikhatri994@gmail.com' ? 'hq_admin' : 'field_member';
+        const isHQEmail = user.email === 'ayushikhatri994@gmail.com' || user.email?.endsWith('@ndrf.gov.in');
+        const role = isHQEmail ? 'hq_admin' : 'field';
         await setDoc(doc(db, 'users', user.uid), {
           uid: user.uid,
           name: user.displayName || 'NDRF Member',
@@ -69,9 +74,9 @@ export const Login = ({ onGuestLogin }: { onGuestLogin: (role: 'hq_admin' | 'fie
             </div>
           )}
 
-          {error && (
-            <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-2xl text-xs text-red-600 font-medium">
-              {error}
+          {displayError && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-2xl text-[10px] text-red-600 font-medium leading-relaxed">
+              {displayError}
             </div>
           )}
 
@@ -95,31 +100,11 @@ export const Login = ({ onGuestLogin }: { onGuestLogin: (role: 'hq_admin' | 'fie
               href={window.location.href} 
               target="_blank" 
               rel="noopener noreferrer"
-              className="w-full flex items-center justify-center gap-2 py-3 text-orange-600 font-bold text-sm hover:bg-orange-50 rounded-xl transition-all border border-dashed border-orange-200 mb-6"
+              className="w-full flex items-center justify-center gap-2 py-3 text-orange-600 font-bold text-sm hover:bg-orange-50 rounded-xl transition-all border border-dashed border-orange-200"
             >
               Open in New Tab to Sign In
             </a>
           )}
-
-          <div className="relative my-8">
-            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-100"></div></div>
-            <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-4 text-gray-400 font-bold tracking-widest">Presentation Fallback</span></div>
-          </div>
-
-          <div className="flex gap-4">
-            <button
-              onClick={() => onGuestLogin('hq_admin')}
-              className="flex-1 py-3 px-4 bg-orange-100 text-orange-700 rounded-xl font-bold text-xs hover:bg-orange-200 transition-all"
-            >
-              Guest Admin
-            </button>
-            <button
-              onClick={() => onGuestLogin('field_member')}
-              className="flex-1 py-3 px-4 bg-gray-100 text-gray-700 rounded-xl font-bold text-xs hover:bg-gray-200 transition-all"
-            >
-              Guest Member
-            </button>
-          </div>
         </div>
       </div>
     </div>

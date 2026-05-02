@@ -7,7 +7,7 @@ import { handleFirestoreError } from './Common';
 
 export const Navbar = ({ user, onLogout }: { user: UserProfile, onLogout: () => void }) => {
   const toggleRole = async () => {
-    const newRole = user.role === 'hq_admin' ? 'field_member' : 'hq_admin';
+    const newRole = user.role === 'hq_admin' ? 'field' : 'hq_admin';
     try {
       await updateDoc(doc(db, 'users', user.uid), { role: newRole });
     } catch (err) {
