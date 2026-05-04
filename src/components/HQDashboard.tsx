@@ -5,12 +5,8 @@ import {
   Search, Filter, Trash2, Edit3, Send,
   AlertTriangle, Shield, CheckCircle2, X,
   TrendingUp, Activity, Globe, Clock, Bell, PackagePlus,
-  Image as ImageIcon
+  Image as ImageIcon, History, ClipboardList
 } from 'lucide-react';
-import { 
-  collection, onSnapshot, query, orderBy, 
-  doc, addDoc, updateDoc, deleteDoc, serverTimestamp 
-} from 'firebase/firestore';
 import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -18,9 +14,9 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, 
   Tooltip, ResponsiveContainer, Cell, PieChart, Pie 
 } from 'recharts';
-import { db } from '../firebase';
-import { UserProfile, Resource, EmergencyAlert, OperationType, ResourceRequest, InventoryItem, IncidentPhoto, DisasterIncident } from '../types';
-import { handleFirestoreError } from './Common';
+import { UserProfile, Resource, EmergencyAlert, OperationType, ResourceRequest, InventoryItem, IncidentPhoto, DisasterIncident, OperationalLog } from '../types';
+import { handleFirestoreError, formatTimestamp } from './Common';
+import { getMockDb, updateMockDb, mockServerTimestamp } from '../lib/mockDb';
 
 // Fix Leaflet icon issue
 const DefaultIcon = L.icon({
@@ -39,6 +35,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [photos, setPhotos] = useState<IncidentPhoto[]>([]);
   const [incidents, setIncidents] = useState<DisasterIncident[]>([]);
+  const [logs, setLogs] = useState<OperationalLog[]>([]);
   const [activeIncident, setActiveIncident] = useState<DisasterIncident | null>(null);
   const [activeTab, setActiveTab] = useState<'resources' | 'inventory' | 'incidents'>('resources');
   const [loading, setLoading] = useState(true);
@@ -53,24 +50,27 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
     message: string;
     onConfirm: () => void;
   }>({ title: '', message: '', onConfirm: () => {} });
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyResourceId, setHistoryResourceId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<Resource['type'] | 'all'>('all');
 
   // Form states
   const [newResource, setNewResource] = useState<Partial<Resource>>({
-    name: 'Water Rescue Unit Alpha', 
+    name: 'National NDRF Unit', 
     type: 'team', 
     status: 'on_standby', 
-    location: { lat: 30.7346, lng: 79.0669 },
+    location: { lat: 20.5937, lng: 78.9629 }, // Center of India
     disasterZone: '',
     affectedArea: ''
   });
 
   const [newIncident, setNewIncident] = useState<Partial<DisasterIncident>>({
     name: '',
+    type: 'flood',
     severity: 'high',
-    epicenter: { lat: 30.7346, lng: 79.0669 },
-    radiusKm: 15
+    epicenter: { lat: 20.5937, lng: 78.9629 },
+    radiusKm: 50
   });
   const [newAlert, setNewAlert] = useState<Partial<EmergencyAlert>>({
     title: '', 
@@ -81,207 +81,161 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
   });
 
   useEffect(() => {
-    // Listen to all resources
-    const q = query(collection(db, 'resources'), orderBy('lastUpdated', 'desc'));
-    const unsubResources = onSnapshot(q, (snapshot) => {
-      setResources(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Resource)));
-      setLoading(false);
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'resources');
-    });
-
-    // Listen to all alerts
-    const alertsQ = query(collection(db, 'alerts'), orderBy('timestamp', 'desc'));
-    const unsubAlerts = onSnapshot(alertsQ, (snapshot) => {
-      setAlerts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as EmergencyAlert)));
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'alerts');
-    });
-
-    // Listen to all requests
-    const requestsQ = query(collection(db, 'requests'), orderBy('timestamp', 'desc'));
-    const unsubRequests = onSnapshot(requestsQ, (snapshot) => {
-      setRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ResourceRequest)));
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'requests');
-    });
-
-    // Listen to inventory
-    const inventoryQ = query(collection(db, 'inventory'), orderBy('name', 'asc'));
-    const unsubInventory = onSnapshot(inventoryQ, (snapshot) => {
-      setInventory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryItem)));
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'inventory');
-    });
-
-    // Listen to photos
-    const unsubPhotos = onSnapshot(query(collection(db, 'photos'), orderBy('timestamp', 'desc')), (snapshot) => {
-      setPhotos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as IncidentPhoto)));
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'photos');
-    });
-
-    // Listen to incidents
-    const unsubIncidents = onSnapshot(query(collection(db, 'incidents'), orderBy('timestamp', 'desc')), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DisasterIncident));
-      setIncidents(data);
+    const fetchData = () => {
+      const db = getMockDb();
+      setResources(db.resources);
+      setAlerts(db.alerts);
+      setRequests(db.requests);
+      setInventory(db.inventory);
+      setPhotos(db.photos);
+      setIncidents(db.incidents);
+      setUsers(db.users);
+      setLogs(db.logs);
       
-      // Auto-select first incident if none selected or if current one was deleted
-      if (data.length > 0) {
-        if (!activeIncident || !data.find(i => i.id === activeIncident.id)) {
-          setActiveIncident(data[0]);
+      if (db.incidents.length > 0) {
+        if (!activeIncident || !db.incidents.find(i => i.id === activeIncident.id)) {
+          setActiveIncident(db.incidents[0]);
         }
       } else {
         setActiveIncident(null);
       }
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'incidents');
-    });
-
-    // Listen to users
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-      setUsers(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as UserProfile)));
-    });
-
-    return () => {
-      unsubResources();
-      unsubAlerts();
-      unsubRequests();
-      unsubInventory();
-      unsubPhotos();
-      unsubIncidents();
-      unsubUsers();
+      
+      setLoading(false);
     };
-  }, []); 
 
-  const handleUpdateStatus = async (id: string, status: Resource['status']) => {
-    try {
-      await updateDoc(doc(db, 'resources', id), {
-        status,
-        lastUpdated: serverTimestamp()
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `resources/${id}`);
-    }
+    fetchData();
+    window.addEventListener('mock-db-update', fetchData);
+    return () => window.removeEventListener('mock-db-update', fetchData);
+  }, [activeIncident]); 
+
+  const handleUpdateStatus = (id: string, status: Resource['status']) => {
+    const db = getMockDb();
+    const updatedResources = db.resources.map(r => 
+      r.id === id ? { ...r, status, lastUpdated: mockServerTimestamp() } : r
+    );
+    updateMockDb({ resources: updatedResources });
   };
 
-  const handleAssignUser = async (resourceId: string, userId: string) => {
-    try {
-      await updateDoc(doc(db, 'resources', resourceId), {
-        assignedTo: userId,
-        lastUpdated: serverTimestamp()
-      });
-      setShowAssignModal(false);
-      setSelectedResourceId(null);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `resources/${resourceId}`);
-    }
+  const handleAssignUser = (resourceId: string, userId: string) => {
+    const db = getMockDb();
+    const updatedResources = db.resources.map(r => 
+      r.id === resourceId ? { ...r, assignedTo: userId, lastUpdated: mockServerTimestamp() } : r
+    );
+    updateMockDb({ resources: updatedResources });
+    setShowAssignModal(false);
+    setSelectedResourceId(null);
   };
 
   const handleDeleteResource = (id: string) => {
     setConfirmConfig({
       title: 'Decommission Asset?',
       message: 'Are you sure you want to remove this resource unit from active registry? This action is permanent.',
-      onConfirm: async () => {
-        try {
-          await deleteDoc(doc(db, 'resources', id));
-          setShowConfirm(false);
-        } catch (err) {
-          handleFirestoreError(err, OperationType.DELETE, `resources/${id}`);
-        }
+      onConfirm: () => {
+        const db = getMockDb();
+        updateMockDb({ resources: db.resources.filter(r => r.id !== id) });
+        setShowConfirm(false);
       }
     });
     setShowConfirm(true);
   };
 
-  const handleUpdateRequestStatus = async (request: ResourceRequest, status: ResourceRequest['status']) => {
-    try {
-      // Logic: If status is 'approved' or 'dispatched', attempt to subtract from inventory
-      if (status === 'approved' || status === 'dispatched') {
-        if (request.status === 'pending') {
-          const inventoryItem = inventory.find(i => 
-            i.name.toLowerCase().includes((request.item || '').toLowerCase()) ||
-            (request.item || '').toLowerCase().includes(i.name.toLowerCase())
+  const handleUpdateRequestStatus = (request: ResourceRequest, status: ResourceRequest['status']) => {
+    const data = getMockDb();
+    
+    // Logic: If status is 'approved' or 'dispatched', attempt to subtract from inventory
+    if ((status === 'approved' || status === 'dispatched') && request.status === 'pending') {
+      const inventoryItem = data.inventory.find(i => 
+        i.name.toLowerCase().includes((request.item || '').toLowerCase()) ||
+        (request.item || '').toLowerCase().includes(i.name.toLowerCase())
+      );
+      
+      if (inventoryItem) {
+        const qtyToSubtract = Number(request.quantity) || 1;
+        if (inventoryItem.quantity >= qtyToSubtract) {
+          // Update global inventory
+          const updatedInventory = data.inventory.map(i => 
+            i.id === inventoryItem.id ? { ...i, quantity: Math.max(0, i.quantity - qtyToSubtract), lastUpdated: mockServerTimestamp() } : i
           );
-          if (inventoryItem) {
-            const qtyToSubtract = Number(request.quantity) || 1;
-            if (inventoryItem.quantity < qtyToSubtract) {
-              console.warn(`Insufficient inventory for ${request.item}. Current: ${inventoryItem.quantity}`);
-            } else {
-              console.log(`Subtracting ${qtyToSubtract} from ${inventoryItem.name}`);
-              await updateDoc(doc(db, 'inventory', inventoryItem.id), {
-                quantity: Math.max(0, inventoryItem.quantity - qtyToSubtract),
-                lastUpdated: serverTimestamp()
-              });
-            }
-          } else {
-            console.warn('No matching inventory item found for sync:', request.item);
+
+          // Update team inventory
+          let updatedResources = data.resources;
+          if (request.resourceId) {
+            const newItemKey = inventoryItem.name.toLowerCase().replace(/\s+/g, '_');
+            updatedResources = data.resources.map(r => 
+              r.id === request.resourceId ? { 
+                ...r, 
+                inventory: { ...(r.inventory || {}), [newItemKey]: (r.inventory?.[newItemKey] || 0) + qtyToSubtract },
+                lastUpdated: mockServerTimestamp() 
+              } : r
+            );
           }
+          
+          updateMockDb({ inventory: updatedInventory, resources: updatedResources });
         }
       }
-      
-      await updateDoc(doc(db, 'requests', request.id), { 
-        status,
-        lastUpdated: serverTimestamp() 
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `requests/${request.id}`);
     }
+    
+    const updatedRequests = data.requests.map(r => 
+      r.id === request.id ? { ...r, status, lastUpdated: mockServerTimestamp() } : r
+    );
+    updateMockDb({ requests: updatedRequests });
   };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAddIncident = async (e: React.FormEvent) => {
+  const handleAddIncident = (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      console.log('Declaring Incident with state:', newIncident);
-      const payload = {
+      const db = getMockDb();
+      const payload: DisasterIncident = {
+        id: `inc-${Date.now()}`,
         name: newIncident.name || 'Unnamed Disaster',
+        type: newIncident.type || 'flood',
         severity: newIncident.severity || 'high',
-        epicenter: newIncident.epicenter || { lat: 30.7346, lng: 79.0669 },
-        radiusKm: Number(newIncident.radiusKm) || 15,
+        epicenter: newIncident.epicenter || { lat: 20.5937, lng: 78.9629 },
+        radiusKm: Number(newIncident.radiusKm) || 50,
+        timestamp: mockServerTimestamp(),
         status: 'active',
-        affectedClusters: [],
-        timestamp: serverTimestamp()
+        affectedClusters: []
       };
       
-      await addDoc(collection(db, 'incidents'), payload);
+      updateMockDb({ incidents: [payload, ...db.incidents] });
       setShowAddIncidentModal(false);
       setNewIncident({ name: '', severity: 'high', epicenter: { lat: 30.7346, lng: 79.0669 }, radiusKm: 15 });
     } catch (err) {
       console.error('Add Incident Error:', err);
-      handleFirestoreError(err, OperationType.CREATE, 'incidents');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleAddSubmit = async (e: React.FormEvent) => {
+  const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      if (activeTab === 'resources') {
-        await addDoc(collection(db, 'resources'), {
-          ...newResource,
-          lastUpdated: serverTimestamp()
-        });
-      } else {
-        await addDoc(collection(db, 'inventory'), {
-          ...newInventoryItem,
-          lastUpdated: serverTimestamp()
-        });
-      }
-      setShowAddModal(false);
-      setNewResource({ 
-        name: '', type: 'team', status: 'on_standby', 
-        location: { lat: 30.7346, lng: 79.0669 },
-        disasterZone: '', affectedArea: ''
-      });
-      setNewInventoryItem({ name: '', category: 'medical', quantity: 0, unit: '', minThreshold: 0 });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, activeTab);
+    const db = getMockDb();
+    if (activeTab === 'resources') {
+      const payload: Resource = {
+        ...newResource as Resource,
+        id: `res-${Date.now()}`,
+        lastUpdated: mockServerTimestamp()
+      };
+      updateMockDb({ resources: [payload, ...db.resources] });
+    } else {
+      const payload: InventoryItem = {
+        ...newInventoryItem as InventoryItem,
+        id: `inv-${Date.now()}`,
+        lastUpdated: mockServerTimestamp()
+      };
+      updateMockDb({ inventory: [payload, ...db.inventory] });
     }
+    setShowAddModal(false);
+    setNewResource({ 
+      name: '', type: 'team', status: 'on_standby', 
+      location: { lat: 30.7346, lng: 79.0669 },
+      disasterZone: '', affectedArea: ''
+    });
+    setNewInventoryItem({ name: '', category: 'medical', quantity: 0, unit: '', minThreshold: 0 });
   };
 
   const [newInventoryItem, setNewInventoryItem] = useState<Partial<InventoryItem>>({
@@ -295,30 +249,39 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
     setConfirmConfig({
       title: 'Cancel Request?',
       message: 'Are you sure you want to permanently delete this field request?',
-      onConfirm: async () => {
-        try {
-          await deleteDoc(doc(db, 'requests', id));
-          setShowConfirm(false);
-        } catch (err) {
-          handleFirestoreError(err, OperationType.DELETE, `requests/${id}`);
-        }
+      onConfirm: () => {
+        const data = getMockDb();
+        updateMockDb({ requests: data.requests.filter(r => r.id !== id) });
+        setShowConfirm(false);
       }
     });
     setShowConfirm(true);
   };
 
-  const handleDeleteIncident = (id: string) => {
+  const handleEndMission = (id: string) => {
     setConfirmConfig({
-      title: 'End Mission?',
-      message: 'This will permanently remove the disaster record and all associated logs. Are you sure?',
-      onConfirm: async () => {
-        try {
-          await deleteDoc(doc(db, 'incidents', id));
-          setShowConfirm(false);
-          setActiveIncident(null);
-        } catch (err) {
-          handleFirestoreError(err, OperationType.DELETE, `incidents/${id}`);
-        }
+      title: 'End Mission / Archive Data?',
+      message: 'This will mark the disaster as resolved and archive all associated operational data. Action is permanent.',
+      onConfirm: () => {
+        const data = getMockDb();
+        // Update incident status to resolved
+        const updatedIncidents = data.incidents.map(i => 
+          i.id === id ? { ...i, status: 'resolved' as const } : i
+        );
+        
+        // Archive associated alerts
+        const activeIncidentObj = data.incidents.find(i => i.id === id);
+        const updatedAlerts = data.alerts.map(a => 
+          a.disasterZone === activeIncidentObj?.name ? { ...a, active: false } : a
+        );
+
+        updateMockDb({ 
+          incidents: updatedIncidents,
+          alerts: updatedAlerts
+        });
+        
+        setShowConfirm(false);
+        setActiveIncident(null);
       }
     });
     setShowConfirm(true);
@@ -342,19 +305,18 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
     handleAddSubmit(e);
   };
 
-  const handleSendAlert = async (e: React.FormEvent) => {
+  const handleSendAlert = (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      await addDoc(collection(db, 'alerts'), {
-        ...newAlert,
-        active: true,
-        timestamp: serverTimestamp()
-      });
-      setShowAlertModal(false);
-      setNewAlert({ title: '', message: '', severity: 'medium', disasterZone: '', affectedArea: '' });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, 'alerts');
-    }
+    const db = getMockDb();
+    const payload: EmergencyAlert = {
+      ...newAlert as EmergencyAlert,
+      id: `alt-${Date.now()}`,
+      active: true,
+      timestamp: mockServerTimestamp()
+    };
+    updateMockDb({ alerts: [payload, ...db.alerts] });
+    setShowAlertModal(false);
+    setNewAlert({ title: '', message: '', severity: 'medium', disasterZone: '', affectedArea: '' });
   };
 
   const filteredResources = resources.filter(r => 
@@ -364,15 +326,22 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
      r.affectedArea?.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  const handleUnassignUser = async (resourceId: string) => {
-    try {
-      await updateDoc(doc(db, 'resources', resourceId), {
-        assignedTo: null,
-        lastUpdated: serverTimestamp()
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `resources/${resourceId}`);
-    }
+  const handleUnassignUser = (resourceId: string) => {
+    const data = getMockDb();
+    const updated = data.resources.map(r => r.id === resourceId ? { ...r, assignedTo: undefined, lastUpdated: mockServerTimestamp() } : r);
+    updateMockDb({ resources: updated });
+  };
+
+  const forceResetData = () => {
+    setConfirmConfig({
+      title: 'Factory Reset Mock Database?',
+      message: 'This will purge all local data and restore NDRF specialized units to factory defaults. Use if you encounter missing units or "0 Total" errors.',
+      onConfirm: () => {
+        localStorage.removeItem('ndrf_mock_db');
+        window.location.reload();
+      }
+    });
+    setShowConfirm(true);
   };
 
   // AI Logic: Closest Resource Routing
@@ -403,71 +372,91 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
 
   if (loading) return (
     <div className="flex items-center justify-center min-h-[60vh]">
-      <div className="w-12 h-12 border-4 border-orange-200 border-t-orange-600 rounded-full animate-spin" />
+      <div className="w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin" />
     </div>
   );
 
   return (
     <div className="p-4 md:p-8 max-w-[1600px] mx-auto space-y-8">
+      {/* NDRF READY SUMMARY BAR */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {[
+          { label: 'Total NDRF Assets', value: resources.length, color: 'text-white', bg: 'bg-slate-900 border-slate-800' },
+          { label: 'Available / Standby', value: resources.filter(r => !r.assignedTo).length, color: 'text-green-500', bg: 'bg-green-500/5 border-green-500/20' },
+          { label: 'Occupied / On Duty', value: resources.filter(r => r.assignedTo).length, color: 'text-orange-500', bg: 'bg-orange-500/5 border-orange-500/20' },
+          { label: 'Active Engagements', value: resources.filter(r => r.status === 'active').length, color: 'text-red-500', bg: 'bg-red-500/5 border-red-500/20' }
+        ].map(stat => (
+          <div key={stat.label} className={`p-6 rounded-[2rem] border ${stat.bg} shadow-sm backdrop-blur-md`}>
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">{stat.label}</p>
+            <p className={`text-4xl font-black ${stat.color}`}>{stat.value}</p>
+          </div>
+        ))}
+      </div>
+
       {/* AI Intelligence Header */}
-      <div className="bg-gray-900 rounded-[2rem] p-8 text-white relative overflow-hidden shadow-2xl">
-        <div className="absolute top-0 right-0 w-1/2 h-full bg-gradient-to-l from-orange-600/20 to-transparent pointer-events-none" />
+      <div className="bg-slate-900 rounded-[2rem] p-8 text-white relative overflow-hidden shadow-2xl">
+        <div className="absolute top-0 right-0 w-1/2 h-full bg-gradient-to-l from-blue-600/20 to-transparent pointer-events-none" />
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
           <div className="space-y-4">
             <div className="flex items-center gap-3">
-              <div className="bg-orange-500 p-2 rounded-xl animate-pulse">
+              <div className="bg-red-600 p-2 rounded-xl animate-pulse">
                 <Globe className="w-6 h-6 text-white" />
               </div>
-              <h1 className="text-3xl font-black tracking-tight">Geospatial Intelligence Dashboard</h1>
+              <h1 className="text-3xl font-black tracking-tight uppercase">National Tactical Command Center</h1>
             </div>
-              <div className="flex flex-wrap gap-3">
-                {incidents
-                  .reduce((acc: DisasterIncident[], curr) => {
-                    if (!acc.find(i => i.name === curr.name)) acc.push(curr);
-                    return acc;
-                  }, [])
-                  .map(inc => (
-                  <button
-                    key={inc.id}
-                    onClick={() => setActiveIncident(inc)}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${
-                      activeIncident?.id === inc.id 
-                      ? 'bg-orange-600 border-orange-500 text-white shadow-lg shadow-orange-900/50' 
-                      : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
-                    }`}
-                  >
-                    {inc.name}
-                  </button>
-                ))}
-              </div>
+            <p className="text-blue-400 text-[10px] font-black uppercase tracking-[0.3em]">Digital War Room • All-India Tactical Intelligence</p>
+            <div className="flex flex-wrap gap-2 mt-4">
+              {incidents
+                .filter(i => i.status !== 'resolved')
+                .map(inc => (
+                <button
+                  key={inc.id}
+                  onClick={() => setActiveIncident(inc)}
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border ${
+                    activeIncident?.id === inc.id 
+                    ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/50' 
+                    : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
+                  }`}
+                >
+                  {inc.type?.toUpperCase() || 'OPS'}: {inc.name}
+                </button>
+              ))}
+            </div>
           </div>
           
           <div className="flex items-center gap-6 divide-x divide-white/10">
             <div className="pl-6 first:pl-0">
-              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Impact Level</p>
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Threat Level</p>
               <p className={`text-xl font-black uppercase ${activeIncident?.severity === 'critical' ? 'text-red-500' : 'text-orange-500'}`}>
-                {activeIncident?.severity || 'Normal'}
+                {activeIncident?.severity || 'STANDBY'}
               </p>
             </div>
             <div className="pl-6">
-              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Radius (KM)</p>
-              <p className="text-xl font-black text-white">{activeIncident?.radiusKm || 0}</p>
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Combat Zone</p>
+              <p className="text-xl font-black text-white">{activeIncident?.radiusKm || 0} KM</p>
             </div>
             <div className="pl-6">
-              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Alert Scale</p>
-              <p className="text-xl font-black text-white">{alerts.length}</p>
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Asset Count</p>
+              <p className="text-xl font-black text-white">{resources.filter(r => r.disasterZone === activeIncident?.name).length}</p>
             </div>
-            {activeIncident && (
-              <div className="pl-6 border-l border-white/10">
+            <div className="pl-6 border-l border-white/10 flex items-center gap-4">
                 <button 
-                  onClick={() => handleDeleteIncident(activeIncident.id)}
-                  className="bg-red-600/20 hover:bg-red-600 p-3 rounded-2xl text-red-500 hover:text-white transition-all group"
-                  title="End Mission"
+                  onClick={forceResetData}
+                  className="px-4 py-3 bg-white/10 hover:bg-white/20 text-white/60 hover:text-white rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all"
+                  title="Force Reset Data"
                 >
-                  <Trash2 className="w-5 h-5 transition-transform group-hover:scale-110" />
+                  Reset DB
                 </button>
+                {activeIncident && (
+                  <button 
+                    onClick={() => handleEndMission(activeIncident.id)}
+                    className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center gap-2 shadow-lg shadow-red-900/40 transition-all active:scale-95 group"
+                  >
+                    <CheckCircle2 className="w-4 h-4 transition-transform group-hover:scale-110" />
+                    End Mission
+                  </button>
+                )}
               </div>
-            )}
           </div>
         </div>
       </div>
@@ -478,7 +467,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
           <div className="bg-white rounded-[2.5rem] border border-gray-100 shadow-2xl overflow-hidden h-[650px] relative">
             <div className="absolute top-6 left-6 z-[40] space-y-3">
               <div className="bg-white/90 backdrop-blur-md p-4 rounded-3xl shadow-2xl border border-gray-100 flex items-center gap-4">
-                <div className="w-10 h-10 bg-orange-600 rounded-2xl flex items-center justify-center text-white">
+                <div className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center text-white">
                   <Activity className="w-5 h-5" />
                 </div>
                 <div>
@@ -519,7 +508,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                     <div className="p-3 space-y-3 min-w-[200px]">
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                          r.type === 'team' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'
+                          r.type === 'team' ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-600'
                         }`}>
                           {r.type === 'team' ? <Users className="w-5 h-5" /> : <Truck className="w-5 h-5" />}
                         </div>
@@ -533,7 +522,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                           <div className={`w-2 h-2 rounded-full ${r.status === 'active' ? 'bg-green-500' : 'bg-yellow-500'}`} />
                           <span className="text-[10px] font-black uppercase text-gray-700">{r.status.replace('_', ' ')}</span>
                         </div>
-                        <p className="text-[10px] text-orange-600 font-black uppercase tracking-tight bg-orange-50 px-2 py-1 rounded w-fit">
+                        <p className="text-[10px] text-blue-600 font-black uppercase tracking-tight bg-blue-50 px-2 py-1 rounded w-fit">
                           Cluster: {r.disasterZone}
                         </p>
                       </div>
@@ -592,7 +581,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                   <button 
                     key={tab}
                     onClick={() => setActiveTab(tab as any)}
-                    className={`flex items-center gap-3 transition-all ${activeTab === tab ? 'text-orange-600 scale-105' : 'text-gray-300'}`}
+                    className={`flex items-center gap-3 transition-all ${activeTab === tab ? 'text-blue-600 scale-105' : 'text-slate-300'}`}
                   >
                     {tab === 'resources' ? <Users className="w-5 h-5" /> : 
                      tab === 'inventory' ? <Package className="w-5 h-5" /> :
@@ -632,7 +621,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                 <input 
                   type="text" 
                   placeholder={`Intercept signals in ${activeTab}...`} 
-                  className="w-full pl-12 pr-6 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="w-full pl-12 pr-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -663,12 +652,16 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                       <tr>
                         <th className="px-6 py-4">Incident Name</th>
                         <th className="px-6 py-4">Severity</th>
+                        <th className="px-6 py-4">Status</th>
                         <th className="px-6 py-4">Radius</th>
                         <th className="px-6 py-4 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {incidents.filter(i => i.name.toLowerCase().includes(searchTerm.toLowerCase())).map((incident) => (
+                      {incidents
+                        .filter(i => i.name.toLowerCase().includes(searchTerm.toLowerCase()))
+                        .sort((a, b) => (a.status === 'resolved' ? 1 : -1))
+                        .map((incident) => (
                         <tr key={incident.id} className="hover:bg-gray-50 transition-all group">
                           <td className="px-6 py-4">
                             <span className="text-sm font-bold text-gray-900">{incident.name}</span>
@@ -676,22 +669,34 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                           <td className="px-6 py-4">
                             <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
                               incident.severity === 'critical' ? 'bg-red-100 text-red-600' :
-                              incident.severity === 'high' ? 'bg-orange-100 text-orange-600' :
+                              incident.severity === 'high' ? 'bg-blue-100 text-blue-600' :
                               'bg-blue-100 text-blue-600'
                             }`}>
                               {incident.severity}
                             </span>
                           </td>
                           <td className="px-6 py-4">
+                            <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                              incident.status === 'resolved' ? 'bg-gray-100 text-gray-400' :
+                              incident.status === 'active' ? 'bg-green-100 text-green-600' :
+                              'bg-blue-100 text-blue-600'
+                            }`}>
+                              {incident.status || 'active'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
                             <span className="text-xs font-medium text-gray-500">{incident.radiusKm} km</span>
                           </td>
                           <td className="px-6 py-4 text-right">
-                            <button 
-                              onClick={() => handleDeleteIncident(incident.id)}
-                              className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            {incident.status !== 'resolved' && (
+                              <button 
+                                onClick={() => handleEndMission(incident.id)}
+                                className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-all"
+                                title="Resolve Incident"
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -714,7 +719,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-3">
                               <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                                resource.type === 'team' ? 'bg-orange-100 text-orange-600' :
+                                resource.type === 'team' ? 'bg-blue-100 text-blue-600' :
                                 resource.type === 'vehicle' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'
                               }`}>
                                 {resource.type === 'team' ? <Users className="w-4 h-4" /> :
@@ -731,11 +736,14 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                               <div className="flex items-center gap-2">
                                 <div className={`w-2 h-2 rounded-full ${
                                   resource.status === 'active' ? 'bg-green-500' : 
-                                  resource.status === 'en_route' ? 'bg-blue-500' : 'bg-yellow-500'
+                                  resource.status === 'on_duty' ? 'bg-blue-600' :
+                                  resource.status === 'near_disaster' ? 'bg-orange-500' :
+                                  resource.status === 'en_route' ? 'bg-cyan-500' :
+                                  resource.status === 'at_rest' ? 'bg-indigo-500' : 'bg-slate-400'
                                 }`} />
                                 <span className="text-xs font-bold text-gray-700 uppercase">{resource.status.replace('_', ' ')}</span>
                               </div>
-                              <div className="text-[10px] text-orange-600 font-black uppercase tracking-tight bg-orange-50 px-1.5 py-0.5 rounded leading-none w-fit">
+                              <div className="text-[10px] text-blue-600 font-black uppercase tracking-tight bg-blue-50 px-1.5 py-0.5 rounded leading-none w-fit">
                                 {resource.disasterZone || 'No Zone'}
                               </div>
                             </div>
@@ -772,10 +780,20 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                             <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
                               <button 
                                 onClick={() => {
+                                  setHistoryResourceId(resource.id);
+                                  setShowHistoryModal(true);
+                                }}
+                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                                title="Operation History"
+                              >
+                                <History className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={() => {
                                   setSelectedResourceId(resource.id);
                                   setShowAssignModal(true);
                                 }}
-                                className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
+                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
                                 title="Assign Personnel"
                               >
                                 <Edit3 className="w-4 h-4" />
@@ -814,32 +832,58 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                       {inventory
-                        .reduce((acc: InventoryItem[], curr) => {
+                        .reduce((acc: any[], curr) => {
                           const existing = acc.find(item => item.name.toLowerCase() === curr.name.toLowerCase());
                           if (existing) {
                             existing.quantity += curr.quantity;
                             return acc;
                           }
-                          return [...acc, { ...curr }];
+                          
+                          // Calculate global field usage
+                          const fieldUsage = resources.reduce((usageAcc, res) => {
+                            const resInv = res.inventory || {};
+                            const key = curr.name.toLowerCase().replace(/\s+/g, '_');
+                            return usageAcc + (resInv[key] || 0);
+                          }, 0);
+
+                          return [...acc, { ...curr, fieldQuantity: fieldUsage }];
                         }, [])
                         .map((item) => (
                         <tr key={item.id} className="hover:bg-gray-50 transition-all group">
                           <td className="px-6 py-4">
                             <span className="font-bold text-gray-900 text-sm block">{item.name}</span>
+                            <span className="text-[9px] text-gray-400 font-bold uppercase">Asset Cluster</span>
                           </td>
                           <td className="px-6 py-4 uppercase text-[10px] font-bold text-gray-400">{item.category}</td>
                           <td className="px-6 py-4">
-                            <div className="flex items-center gap-3">
-                              <span className={`text-sm font-black ${item.quantity <= (item.minThreshold || 0) ? 'text-red-600' : 'text-gray-900'}`}>
-                                {item.quantity} {item.unit}
-                              </span>
-                              {item.quantity <= (item.minThreshold || 0) && (
-                                <span className="text-[8px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-black uppercase">Low Stock</span>
-                              )}
+                            <div className="flex items-center gap-6">
+                              <div>
+                                <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">HQ Stock</p>
+                                <span className={`text-sm font-black ${item.quantity <= (item.minThreshold || 0) ? 'text-red-600' : 'text-gray-900'}`}>
+                                  {item.quantity} {item.unit}
+                                </span>
+                              </div>
+                              <div className="w-px h-6 bg-gray-100" />
+                              <div>
+                                <p className="text-[8px] font-black text-blue-400 uppercase tracking-widest mb-1">In Field</p>
+                                <span className="text-sm font-black text-blue-600">
+                                  {item.fieldQuantity} {item.unit}
+                                </span>
+                                {item.fieldQuantity > 0 && (
+                                  <span className="ml-2 text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-lg font-black uppercase">Active</span>
+                                )}
+                              </div>
+                              <div className="w-px h-6 bg-gray-100" />
+                              <div>
+                                <p className="text-[8px] font-black text-blue-600 uppercase tracking-widest mb-1">Global Total</p>
+                                <span className="text-sm font-black text-gray-900">
+                                  {item.quantity + item.fieldQuantity}
+                                </span>
+                              </div>
                             </div>
                           </td>
                           <td className="px-6 py-4 text-right text-[10px] font-bold text-gray-400">
-                            {item.lastUpdated ? (item.lastUpdated as any).toDate().toLocaleDateString() : 'N/A'}
+                            {formatTimestamp(item.lastUpdated, 'date')}
                           </td>
                         </tr>
                       ))}
@@ -854,7 +898,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden h-[500px] relative">
             <div className="absolute top-4 left-4 z-[40] bg-white p-3 rounded-2xl shadow-xl border border-gray-100">
               <div className="flex items-center gap-2">
-                <Globe className="w-4 h-4 text-orange-600" />
+                <Globe className="w-4 h-4 text-blue-600" />
                 <span className="text-xs font-bold text-gray-900 uppercase tracking-widest">Global Fleet View (All Assets)</span>
               </div>
             </div>
@@ -866,7 +910,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                     <div className="p-2 space-y-2">
                       <div>
                         <p className="font-bold text-gray-900 text-sm">{r.name}</p>
-                        <p className="text-[10px] text-orange-600 font-black uppercase">{r.disasterZone}</p>
+                        <p className="text-[10px] text-blue-600 font-black uppercase">{r.disasterZone}</p>
                       </div>
                       <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
                         <div className={`w-2 h-2 rounded-full ${
@@ -901,7 +945,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
 
           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm">
             <div className="flex items-center gap-3 mb-6">
-              <TrendingUp className="w-5 h-5 text-orange-600" />
+              <TrendingUp className="w-5 h-5 text-blue-600" />
               <h3 className="font-black text-gray-900 uppercase text-xs tracking-widest">Impact Analytics</h3>
             </div>
             <div className="h-[200px]">
@@ -927,27 +971,43 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
-                <Bell className="w-5 h-5 text-red-600" />
-                <h3 className="font-black text-gray-900 uppercase text-xs tracking-widest">Intelligence Feed</h3>
+                <Activity className="w-5 h-5 text-red-600" />
+                <h3 className="font-black text-gray-900 uppercase text-xs tracking-widest">Operational Intelligence</h3>
               </div>
             </div>
-            <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2 scrollbar-hide">
-              {alerts.map((alert) => (
-                <div key={alert.id} className={`p-4 rounded-2xl border-l-4 ${
-                  alert.severity === 'critical' ? 'bg-red-50 border-red-600' :
-                  alert.severity === 'high' ? 'bg-orange-50 border-orange-600' : 'bg-blue-50 border-blue-600'
+            <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+              {/* Combine Logs and Alerts */}
+              {[
+                ...alerts.map(a => ({ ...a, type: 'alert' })),
+                ...logs.map(l => ({ ...l, type: 'log' }))
+              ]
+              .sort((a: any, b: any) => {
+                const getTime = (ts: any) => ts?.toDate ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : 0);
+                return getTime(b.timestamp) - getTime(a.timestamp);
+              })
+              .slice(0, 15)
+              .map((item: any) => (
+                <div key={item.id} className={`p-4 rounded-2xl border-l-4 ${
+                  item.type === 'alert' 
+                    ? item.severity === 'critical' ? 'bg-red-50 border-red-600' : 'bg-blue-50 border-blue-600'
+                    : item.details?.type === 'arrival' ? 'bg-green-50 border-green-600' : 'bg-blue-50 border-blue-600'
                 }`}>
                   <div className="flex items-center justify-between mb-2">
                     <span className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full ${
-                      alert.severity === 'critical' ? 'bg-red-100 text-red-700' :
-                      alert.severity === 'high' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                      item.type === 'alert' 
+                        ? item.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
+                        : item.details?.type === 'arrival' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
                     }`}>
-                      {alert.severity}
+                      {item.type === 'alert' ? `ALERT: ${item.severity}` : `REPORT: ${item.type.toUpperCase()}`}
                     </span>
-                    <span className="text-[8px] text-gray-400 font-bold">{alert.timestamp?.toDate().toLocaleTimeString()}</span>
+                    <span className="text-[8px] text-gray-400 font-bold">{formatTimestamp(item.timestamp, 'time')}</span>
                   </div>
-                  <h4 className="text-[11px] font-bold text-gray-900 mb-1 leading-tight">{alert.title}</h4>
-                  <p className="text-[9px] text-orange-600 font-black uppercase leading-none">{alert.disasterZone}</p>
+                  <h4 className="text-[11px] font-bold text-gray-900 mb-1 leading-tight">
+                    {item.type === 'alert' ? item.title : item.message}
+                  </h4>
+                  <p className="text-[9px] text-blue-600 font-black uppercase leading-none">
+                    {item.type === 'alert' ? item.disasterZone : item.resourceName}
+                  </p>
                 </div>
               ))}
             </div>
@@ -956,23 +1016,23 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm transition-all hover:shadow-md">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
-                <PackagePlus className="w-5 h-5 text-orange-600" />
+                <PackagePlus className="w-5 h-5 text-blue-600" />
                 <h3 className="font-black text-gray-900 uppercase text-xs tracking-widest">Global Requests</h3>
               </div>
               <button 
                 onClick={() => setShowGlobalRequests(true)}
-                className="text-[10px] font-black text-orange-600 uppercase hover:underline"
+                className="text-[10px] font-black text-blue-600 uppercase hover:underline"
               >
                 View All
               </button>
             </div>
             <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 scrollbar-hide">
               {requests.filter(r => r.status === 'pending').slice(0, 5).map((request) => (
-                <div key={request.id} className="p-4 rounded-3xl border border-gray-100 bg-gray-50/50 space-y-3 transition-all hover:border-orange-200">
+                <div key={request.id} className="p-4 rounded-3xl border border-gray-100 bg-gray-50/50 space-y-3 transition-all hover:border-blue-200">
                   <div className="flex items-center justify-between">
                     <h4 className="text-[11px] font-black text-gray-900">{request.item}</h4>
                     <div className="flex items-center gap-2">
-                      <span className="text-[9px] font-black text-orange-600">Qty: {request.quantity}</span>
+                      <span className="text-[9px] font-black text-blue-600">Qty: {request.quantity}</span>
                       <button onClick={() => handleDeleteRequest(request.id)} className="p-1 hover:bg-red-50 text-gray-400 hover:text-red-600 rounded-lg">
                         <Trash2 className="w-3 h-3" />
                       </button>
@@ -993,12 +1053,12 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm transition-all hover:shadow-md">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
-                <ImageIcon className="w-5 h-5 text-orange-600" />
+                <ImageIcon className="w-5 h-5 text-blue-600" />
                 <h3 className="font-black text-gray-900 uppercase text-xs tracking-widest">Ground Proof</h3>
               </div>
               <button 
                 onClick={() => setShowGroundProof(true)}
-                className="text-[10px] font-black text-orange-600 uppercase hover:underline"
+                className="text-[10px] font-black text-blue-600 uppercase hover:underline"
               >
                 Gallery
               </button>
@@ -1029,7 +1089,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-white w-full max-w-4xl max-h-[80vh] rounded-[3rem] shadow-2xl overflow-hidden flex flex-col">
               <div className="p-8 border-b border-gray-100 flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <div className="bg-orange-100 p-3 rounded-2xl text-orange-600">
+                  <div className="bg-blue-100 p-3 rounded-2xl text-blue-600">
                     <PackagePlus className="w-6 h-6" />
                   </div>
                   <div>
@@ -1049,13 +1109,13 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                         <div className="flex items-center gap-3">
                           <span className="px-3 py-1 bg-white border border-gray-100 rounded-full text-[10px] font-black text-gray-900">QTY: {request.quantity}</span>
                           <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${
-                            request.priority === 'critical' ? 'bg-red-100 text-red-600' : 'bg-orange-100 text-orange-600'
+                            request.priority === 'critical' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
                           }`}>{request.priority}</span>
                         </div>
                       </div>
                       <button 
                         onClick={() => handleUpdateRequestStatus(request, 'approved')}
-                        className="p-4 bg-orange-600 text-white rounded-2xl hover:bg-orange-700 transition-all shadow-lg shadow-orange-200"
+                        className="p-4 bg-blue-600 text-white rounded-2xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
                       >
                         <CheckCircle2 className="w-5 h-5" />
                       </button>
@@ -1107,7 +1167,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                           <div className="w-6 h-6 bg-gray-100 rounded-full flex items-center justify-center">
                             <Users className="w-3 h-3 text-gray-400" />
                           </div>
-                          <p className="text-[10px] text-gray-500 font-bold uppercase">{photo.uploadedBy} • {photo.timestamp?.toDate().toLocaleTimeString()}</p>
+                          <p className="text-[10px] text-gray-500 font-bold uppercase">{photo.uploadedBy} • {formatTimestamp(photo.timestamp, 'time')}</p>
                         </div>
                       </div>
                     </div>
@@ -1125,8 +1185,8 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowConfirm(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-10 text-center">
-              <div className="w-20 h-20 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-6">
-                <AlertTriangle className="w-10 h-10 text-orange-500" />
+              <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                <AlertTriangle className="w-10 h-10 text-blue-500" />
               </div>
               <h3 className="text-xl font-black text-gray-900 mb-3">{confirmConfig.title}</h3>
               <p className="text-sm text-gray-500 mb-8 leading-relaxed px-4">{confirmConfig.message}</p>
@@ -1139,7 +1199,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                 </button>
                 <button 
                   onClick={confirmConfig.onConfirm}
-                  className="flex-1 py-4 bg-orange-600 text-white rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-orange-700 transition-all shadow-lg shadow-orange-200"
+                  className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
                 >
                   Confirm
                 </button>
@@ -1152,24 +1212,43 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAddIncidentModal(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden p-10">
               <div className="flex items-center justify-between mb-8">
-                <h3 className="text-xl font-black text-gray-900">Record Disaster Incident</h3>
+                <div>
+                  <h3 className="text-xl font-black text-gray-900 uppercase">Declare National Incident</h3>
+                  <p className="text-[10px] font-bold text-red-600 uppercase tracking-widest mt-1">Strategic Command Override</p>
+                </div>
                 <button onClick={() => setShowAddIncidentModal(false)} className="p-2 hover:bg-gray-100 rounded-full"><X className="w-6 h-6" /></button>
               </div>
               <form onSubmit={handleAddIncident} className="space-y-6">
                 <div>
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Incident Name</label>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Operation Name</label>
                   <input 
                     required type="text" placeholder="e.g. Cyclone Relief 2024"
-                    className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm focus:ring-2 focus:ring-red-500 outline-none"
+                    className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-red-500 outline-none"
                     value={newIncident.name}
                     onChange={(e) => setNewIncident({...newIncident, name: e.target.value})}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Category</label>
+                    <select 
+                      className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-[11px] font-bold outline-none uppercase"
+                      value={newIncident.type}
+                      onChange={(e) => setNewIncident({...newIncident, type: e.target.value as any})}
+                    >
+                      <option value="flood">Flood</option>
+                      <option value="cyclone">Cyclone</option>
+                      <option value="earthquake">Earthquake</option>
+                      <option value="landslide">Landslide</option>
+                      <option value="fire">Fire</option>
+                      <option value="tsunami">Tsunami</option>
+                      <option value="industrial">Industrial</option>
+                    </select>
+                  </div>
+                  <div>
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Severity</label>
                     <select 
-                      className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm outline-none"
+                      className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold outline-none"
                       value={newIncident.severity}
                       onChange={(e) => setNewIncident({...newIncident, severity: e.target.value as any})}
                     >
@@ -1179,6 +1258,9 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                       <option value="critical">Critical</option>
                     </select>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Impact Radius (Km)</label>
                     <input 
@@ -1238,8 +1320,8 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
             >
               <div className="bg-gray-900 p-6 text-white flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  {activeTab === 'resources' ? <Plus className="w-5 h-5 text-orange-500" /> : <Package className="w-5 h-5 text-blue-500" />}
-                  <h3 className="font-bold">{activeTab === 'resources' ? 'Register New Resource' : 'Add Inventory Item'}</h3>
+                  {activeTab === 'resources' ? <Shield className="w-5 h-5 text-blue-500" /> : <Package className="w-5 h-5 text-blue-500" />}
+                  <h3 className="font-bold uppercase tracking-widest text-xs">{activeTab === 'resources' ? 'Strategic Asset Enrollment' : 'Logistics Entry'}</h3>
                 </div>
                 <button onClick={() => setShowAddModal(false)} className="p-2 hover:bg-white/10 rounded-lg"><X className="w-5 h-5" /></button>
               </div>
@@ -1251,7 +1333,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                       <input 
                         required type="text" list="ndrf-teams"
                         placeholder="e.g. NDRF Unit Alpha"
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         value={newResource.name}
                         onChange={(e) => setNewResource({...newResource, name: e.target.value})}
                       />
@@ -1272,7 +1354,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                       <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-2">Disaster Cluster / Zone</label>
                       <input 
                         required type="text" placeholder="e.g. Northern Sector Floods"
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         value={newResource.disasterZone}
                         onChange={(e) => setNewResource({...newResource, disasterZone: e.target.value})}
                       />
@@ -1281,7 +1363,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                       <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-2">Specific Affected Area</label>
                       <input 
                         required type="text" placeholder="e.g. Devprayag Junction"
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         value={newResource.affectedArea}
                         onChange={(e) => setNewResource({...newResource, affectedArea: e.target.value})}
                       />
@@ -1413,7 +1495,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                     </div>
                   </>
                 )}
-                <button type="submit" className={`w-full text-white py-4 rounded-2xl font-bold transition-all shadow-lg ${activeTab === 'resources' ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-200' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200'}`}>
+                <button type="submit" className={`w-full text-white py-4 rounded-2xl font-bold transition-all shadow-lg ${activeTab === 'resources' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200'}`}>
                   {activeTab === 'resources' ? 'Register Resource' : 'Add Inventory Item'}
                 </button>
               </form>
@@ -1519,7 +1601,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               className="relative bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
             >
-              <div className="bg-orange-600 p-6 text-white flex items-center justify-between">
+              <div className="bg-blue-600 p-6 text-white flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <Users className="w-5 h-5" />
                   <h3 className="font-bold">Assign Operational Unit</h3>
@@ -1541,7 +1623,7 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                       onClick={() => handleAssignUser(selectedResourceId, u.uid)}
                       className={`w-full p-4 rounded-2xl border-2 text-left transition-all flex items-center gap-4 ${
                         resources.find(r => r.id === selectedResourceId)?.assignedTo === u.uid
-                          ? 'border-orange-600 bg-orange-50'
+                          ? 'border-blue-600 bg-blue-50'
                           : 'border-gray-100 bg-white hover:border-gray-200'
                       }`}
                     >
@@ -1553,10 +1635,105 @@ export const HQDashboard = ({ user }: { user: UserProfile }) => {
                         <p className="text-[10px] text-gray-500 font-medium">{u.email}</p>
                       </div>
                       {resources.find(r => r.id === selectedResourceId)?.assignedTo === u.uid && (
-                        <CheckCircle2 className="w-5 h-5 text-orange-600" />
+                        <CheckCircle2 className="w-5 h-5 text-blue-600" />
                       )}
                     </button>
                   ))}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {showHistoryModal && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-end">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setShowHistoryModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="relative w-full max-w-xl h-full bg-white shadow-2xl flex flex-col"
+            >
+              <div className="p-8 bg-gray-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-500 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                    <History className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black">{resources.find(r => r.id === historyResourceId)?.name}</h3>
+                    <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">Operational Chronicle</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowHistoryModal(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 space-y-8">
+                {/* Stats Summary */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Status Logs</p>
+                    <p className="text-2xl font-black text-gray-900">
+                      {logs.filter(l => l.resourceId === historyResourceId && l.type === 'status_change').length}
+                    </p>
+                  </div>
+                  <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Total Signals</p>
+                    <p className="text-2xl font-black text-gray-900">
+                      {logs.filter(l => l.resourceId === historyResourceId).length}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2">Timeline</h4>
+                  {logs.filter(l => l.resourceId === historyResourceId).length > 0 ? (
+                    <div className="space-y-6 relative before:absolute before:left-[11px] before:top-2 before:bottom-0 before:w-px before:bg-gray-100">
+                      {logs
+                        .filter(l => l.resourceId === historyResourceId)
+                        .sort((a, b) => {
+                          const timeA = typeof a.timestamp?.toDate === 'function' ? a.timestamp.toDate().getTime() : new Date(a.timestamp as any).getTime();
+                          const timeB = typeof b.timestamp?.toDate === 'function' ? b.timestamp.toDate().getTime() : new Date(b.timestamp as any).getTime();
+                          return timeB - timeA;
+                        })
+                        .map((log) => (
+                        <div key={log.id} className="relative pl-10">
+                          <div className={`absolute left-0 top-1 w-6 h-6 rounded-full border-4 border-white shadow-sm flex items-center justify-center ${
+                            log.type === 'status_change' ? 'bg-blue-500' :
+                            log.type === 'arrival' ? 'bg-green-500' :
+                            log.type === 'usage' ? 'bg-orange-500' : 'bg-gray-400'
+                          }`}>
+                            {log.type === 'status_change' ? <TrendingUp className="w-2 h-2 text-white" /> :
+                             log.type === 'arrival' ? <MapPin className="w-2 h-2 text-white" /> :
+                             <Activity className="w-2 h-2 text-white" />}
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-black text-gray-400 uppercase">{log.type.replace('_', ' ')}</span>
+                              <span className="text-[10px] font-bold text-gray-400">{formatTimestamp(log.timestamp)}</span>
+                            </div>
+                            <p className="text-sm font-bold text-gray-900">{log.message}</p>
+                            {log.location && (
+                              <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-50 rounded-lg w-fit">
+                                <MapPin className="w-2.5 h-2.5 text-gray-400" />
+                                <span className="text-[9px] font-bold text-gray-500">{log.location.lat.toFixed(4)}, {log.location.lng.toFixed(4)}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-12 text-center">
+                      <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <ClipboardList className="w-8 h-8 text-gray-200" />
+                      </div>
+                      <p className="text-gray-400 font-bold">No historical data available for this resource.</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>

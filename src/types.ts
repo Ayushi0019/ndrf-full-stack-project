@@ -11,8 +11,8 @@ export interface UserProfile {
 export interface Resource {
   id: string;
   name: string;
-  type: 'team' | 'equipment' | 'vehicle' | 'personnel';
-  status: 'active' | 'en_route' | 'on_standby' | 'maintenance';
+  type: 'team' | 'equipment' | 'vehicle' | 'personnel' | 'aircraft';
+  status: 'active' | 'on_duty' | 'on_standby' | 'at_rest' | 'near_disaster' | 'maintenance' | 'en_route';
   location: {
     lat: number;
     lng: number;
@@ -22,6 +22,7 @@ export interface Resource {
   lastUpdated: Timestamp;
   assignedTo?: string;
   details?: string;
+  inventory?: Record<string, number>;
 }
 
 export interface EmergencyAlert {
@@ -45,6 +46,7 @@ export interface ResourceRequest {
   affectedArea: string;
   requestedBy: string; // User Name
   requesterId: string; // User UID
+  resourceId?: string; // Target Unit ID
   timestamp: Timestamp;
   location: {
     lat: number;
@@ -73,11 +75,13 @@ export interface IncidentPhoto {
     lng: number;
   };
   disasterZone: string;
+  resourceId?: string;
 }
 
 export interface DisasterIncident {
   id: string;
   name: string;
+  type?: 'flood' | 'cyclone' | 'earthquake' | 'landslide' | 'fire' | 'tsunami' | 'industrial';
   epicenter: {
     lat: number;
     lng: number;
@@ -87,6 +91,20 @@ export interface DisasterIncident {
   status: 'active' | 'contained' | 'resolved';
   timestamp: Timestamp;
   affectedClusters: string[];
+}
+
+export interface OperationalLog {
+  id: string;
+  type: 'arrival' | 'usage' | 'status_change' | 'general';
+  message: string;
+  resourceId: string;
+  resourceName: string;
+  timestamp: Timestamp;
+  location: {
+    lat: number;
+    lng: number;
+  };
+  details?: any;
 }
 
 export enum OperationType {

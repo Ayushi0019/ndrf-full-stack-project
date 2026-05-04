@@ -1,110 +1,80 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ShieldAlert, Zap } from 'lucide-react';
-import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { ShieldAlert, Users, LayoutDashboard } from 'lucide-react';
 import { UserProfile } from '../types';
 
-export const Login = ({ authError }: { 
-  authError?: string | null 
+export const Login = ({ onLogin }: { 
+  onLogin: (user: UserProfile) => void 
 }) => {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const navigate = useNavigate();
-  const isIframe = window.self !== window.top;
 
-  const displayError = error || authError;
-
-  const handleLogin = async () => {
-    console.log('Starting Google Login...');
+  const handleMockLogin = (role: 'hq_admin' | 'field') => {
     setLoading(true);
-    setError(null);
-    try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
-      
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-      console.log('Google Login Success:', user.email);
-
-      const userDoc = await getDoc(doc(db, 'users', user.uid));
-      if (!userDoc.exists()) {
-        const isHQEmail = user.email === 'ayushikhatri994@gmail.com' || user.email?.endsWith('@ndrf.gov.in');
-        const role = isHQEmail ? 'hq_admin' : 'field';
-        await setDoc(doc(db, 'users', user.uid), {
-          uid: user.uid,
-          name: user.displayName || 'NDRF Member',
-          email: user.email || '',
-          role,
-          createdAt: serverTimestamp()
-        });
-      }
-      navigate('/');
-    } catch (err: any) {
-      console.error('Login error:', err);
-      if (err.code === 'auth/popup-blocked') {
-        setError('The sign-in window was blocked. Please allow pop-ups or click "Open in New Tab" below.');
-      } else if (err.code === 'auth/cancelled-popup-request') {
-        setError('Sign-in was cancelled. Please try again.');
-      } else {
-        setError(err.message || 'An unexpected error occurred.');
-      }
-    } finally {
+    setTimeout(() => {
+      const mockUser: UserProfile = {
+        uid: role === 'hq_admin' ? 'hq-123' : 'field-456',
+        name: role === 'hq_admin' ? 'HQ Commander' : 'Field Responder',
+        email: role === 'hq_admin' ? 'admin@ndrf.gov.in' : 'member@ndrf.gov.in',
+        role,
+        createdAt: new Date().toISOString() as any
+      };
+      onLogin(mockUser);
       setLoading(false);
-    }
+    }, 500);
   };
 
   return (
-    <div className="min-h-screen bg-orange-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl overflow-hidden">
-        <div className="bg-orange-600 p-12 text-center">
+        <div className="bg-blue-600 p-12 text-center">
           <ShieldAlert className="w-20 h-20 text-white mx-auto mb-6" />
           <h2 className="text-3xl font-bold text-white mb-2">NDRF Portal</h2>
-          <p className="text-orange-100">National Disaster Response Force</p>
+          <p className="text-blue-100 uppercase tracking-widest text-[10px] font-black">National Disaster Response Force</p>
         </div>
-        <div className="p-10">
-          {isIframe && (
-            <div className="mb-6 p-4 bg-blue-50 border border-blue-100 rounded-2xl flex items-start gap-3">
-              <Zap className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
-              <div className="text-xs text-blue-800 leading-relaxed">
-                <p className="font-bold mb-1">Preview Mode Detected</p>
-                Google Sign-in works best in a full window. If it fails, use the button below to open the app in a new tab.
-              </div>
-            </div>
-          )}
-
-          {displayError && (
-            <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-2xl text-[10px] text-red-600 font-medium leading-relaxed">
-              {displayError}
-            </div>
-          )}
+        <div className="p-10 space-y-4">
+          <div className="text-center mb-8">
+            <h3 className="text-lg font-bold text-gray-900">Mission Access</h3>
+            <p className="text-xs text-gray-500">Select your operational role to enter the dashboard</p>
+          </div>
 
           <button
-            onClick={handleLogin}
+            onClick={() => handleMockLogin('hq_admin')}
             disabled={loading}
-            className="w-full flex items-center justify-center gap-3 bg-gray-900 text-white py-4 rounded-2xl font-bold hover:bg-black transition-all disabled:opacity-50 mb-4 shadow-lg shadow-gray-200"
+            className="w-full flex items-center justify-between gap-3 bg-slate-900 text-white p-5 rounded-2xl font-bold hover:bg-slate-800 transition-all disabled:opacity-50 shadow-lg shadow-slate-200 group"
           >
-            {loading ? (
-              <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <>
-                <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-                Sign in with Google
-              </>
-            )}
+            <div className="flex items-center gap-4">
+              <LayoutDashboard className="w-6 h-6 text-blue-400" />
+              <div className="text-left">
+                <span className="block text-sm">HQ Command</span>
+                <span className="block text-[10px] text-slate-400 font-normal">Full resource oversight</span>
+              </div>
+            </div>
+            <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center group-hover:bg-blue-600 transition-colors">
+              <span className="text-xs">→</span>
+            </div>
           </button>
 
-          {isIframe && (
-            <a 
-              href={window.location.href} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="w-full flex items-center justify-center gap-2 py-3 text-orange-600 font-bold text-sm hover:bg-orange-50 rounded-xl transition-all border border-dashed border-orange-200"
-            >
-              Open in New Tab to Sign In
-            </a>
-          )}
+          <button
+            onClick={() => handleMockLogin('field')}
+            disabled={loading}
+            className="w-full flex items-center justify-between gap-3 bg-white text-slate-900 border-2 border-slate-100 p-5 rounded-2xl font-bold hover:border-blue-200 hover:bg-blue-50/50 transition-all disabled:opacity-50 group"
+          >
+            <div className="flex items-center gap-4">
+              <Users className="w-6 h-6 text-blue-600" />
+              <div className="text-left">
+                <span className="block text-sm">Field Unit</span>
+                <span className="block text-[10px] text-slate-500 font-normal">Real-time status updates</span>
+              </div>
+            </div>
+            <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all">
+              <span className="text-xs">→</span>
+            </div>
+          </button>
+
+          <div className="pt-6 border-t border-slate-100 mt-6 overflow-hidden">
+            <p className="text-[9px] text-slate-400 text-center uppercase tracking-widest font-bold">
+              Secure Local Instance • No External Data Sync
+            </p>
+          </div>
         </div>
       </div>
     </div>
