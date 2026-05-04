@@ -15,7 +15,7 @@ import {
   Tooltip, ResponsiveContainer, Cell, PieChart, Pie 
 } from 'recharts';
 import { UserProfile, Resource, EmergencyAlert, OperationType, ResourceRequest, InventoryItem, IncidentPhoto, DisasterIncident, OperationalLog } from '../types';
-import { handleFirestoreError, formatTimestamp } from './Common';
+import { handleSystemError, formatTimestamp } from './Common';
 import { getMockDb, updateMockDb, mockServerTimestamp } from '../lib/mockDb';
 
 // Fix Leaflet icon issue

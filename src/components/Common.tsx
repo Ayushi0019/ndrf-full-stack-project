@@ -1,10 +1,10 @@
 import React, { Component, ErrorInfo, ReactNode, useState, useEffect } from 'react';
 import { ShieldAlert, AlertTriangle, XCircle } from 'lucide-react';
-import { EmergencyAlert, OperationType, FirestoreErrorInfo } from '../types';
+import { EmergencyAlert, OperationType, DataProcessingError } from '../types';
 import { getMockDb } from '../lib/mockDb';
 
-export const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
-  const errInfo: FirestoreErrorInfo = {
+export const handleSystemError = (error: unknown, operationType: OperationType, path: string | null) => {
+  const errInfo: DataProcessingError = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
       userId: 'mock-user',
@@ -62,7 +62,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError
 
   render() {
     if (this.state.hasError) {
-      let errorData: FirestoreErrorInfo | null = null;
+      let errorData: DataProcessingError | null = null;
       try {
         errorData = JSON.parse(this.state.error?.message || '');
       } catch (e) {

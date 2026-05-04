@@ -1,4 +1,6 @@
-import { Timestamp } from 'firebase/firestore';
+export interface Timestamp {
+  toDate(): Date;
+}
 
 export interface UserProfile {
   uid: string;
@@ -116,21 +118,16 @@ export enum OperationType {
   WRITE = 'write',
 }
 
-export interface FirestoreErrorInfo {
+export interface DataProcessingError {
   error: string;
   operationType: OperationType;
   path: string | null;
   authInfo: {
     userId: string | undefined;
     email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
+    emailVerified?: boolean;
+    isAnonymous?: boolean;
+    tenantId?: string | null;
+    providerInfo?: any[];
   }
 }

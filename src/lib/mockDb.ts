@@ -98,7 +98,7 @@ export const getMockDb = (): MockData => {
     Object.keys(obj).forEach(key => {
       const val = obj[key];
       if (val && typeof val === 'object' && val.seconds) {
-        // Handle Firestore-like object {seconds, nanoseconds}
+        // Handle timestamp object {seconds, nanoseconds} if present
         obj[key] = { toDate: () => new Date(val.seconds * 1000) };
       } else if (
         (key === 'timestamp' || key === 'lastUpdated' || key === 'createdAt' || key === 'updatedAt') && 
